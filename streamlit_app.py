@@ -1,151 +1,159 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pydeck as pdk
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+st.set_page_config(page_title="Dashboard Clustering UMKM", layout="wide")
+st.title("📊 Dashboard Interaktif Clustering dan Pemetaan UMKM")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Upload file CSV
+uploaded_file = st.file_uploader("Unggah file CSV data UMKM", type="csv")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    st.subheader("📋 Data Awal")
+    st.write(df)
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+    numeric_cols = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+    st.subheader("⚙️ Pilih Variabel untuk Clustering")
+    features = st.multiselect("Pilih kolom numerik", options=numeric_cols, default=numeric_cols)
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    if len(features) >= 2:
+        X = df[features]
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+        k = st.slider("Jumlah Cluster (K)", 2, 10, 3)
+        kmeans = KMeans(n_clusters=k, random_state=42)
+        df['Cluster'] = kmeans.fit_predict(X_scaled)
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+        st.subheader("📁 Data dengan Klaster")
+        st.dataframe(df)
 
-    return gdp_df
+        st.subheader("📈 Visualisasi Cluster (2D)")
+        x_axis = st.selectbox("X-Axis", features, index=0)
+        y_axis = st.selectbox("Y-Axis", features, index=1)
 
-gdp_df = get_gdp_data()
+        palette = sns.color_palette("tab10", k)
+        fig, ax = plt.subplots()
+        sns.scatterplot(data=df, x=x_axis, y=y_axis, hue='Cluster', palette=palette, s=100)
+        for i in range(len(df)):
+            ax.text(df[x_axis][i], df[y_axis][i], df.index[i], fontsize=9)
+        plt.title("Visualisasi Klaster UMKM")
+        st.pyplot(fig)
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
+        # Rekomendasi per klaster
+        st.subheader("🧠 Rekomendasi Pengembangan UMKM per Klaster")
+        cluster_summary = df.groupby('Cluster')[features].mean().reset_index()
+        st.dataframe(cluster_summary)
 
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+        for idx, row in cluster_summary.iterrows():
+            st.markdown(f"### 🟡 Klaster {int(row['Cluster'])}")
+            rekomendasi = ""
 
-st.header(f'GDP in {to_year}', divider='gray')
+            if 'Omzet_Bulanan' in row:
+                if row['Omzet_Bulanan'] < 10:
+                    rekomendasi += "- Fokus pada pelatihan pemasaran digital dan branding produk.\n"
+                elif row['Omzet_Bulanan'] > 50:
+                    rekomendasi += "- Siap untuk ekspansi usaha dan kemitraan distribusi regional.\n"
+                else:
+                    rekomendasi += "- Dorong efisiensi produksi dan perluas akses ke permodalan.\n"
 
-''
+            if 'Jumlah_Karyawan' in row:
+                if row['Jumlah_Karyawan'] <= 2:
+                    rekomendasi += "- Perlu perekrutan atau pelatihan staf tambahan.\n"
+                elif row['Jumlah_Karyawan'] >= 10:
+                    rekomendasi += "- Implementasi sistem manajemen usaha dan SOP lebih lanjut.\n"
 
-cols = st.columns(4)
+            if 'Lama_Usaha' in row:
+                if row['Lama_Usaha'] < 3:
+                    rekomendasi += "- Pendampingan intensif dan inkubasi bisnis.\n"
+                elif row['Lama_Usaha'] >= 10:
+                    rekomendasi += "- Siap untuk sertifikasi usaha dan masuk pasar nasional/internasional.\n"
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
+            st.markdown(rekomendasi)
 
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
+        # Pemetaan UMKM
+        st.subheader("🗺️ Pemetaan UMKM Berdasarkan Lokasi")
+        if 'Latitude' in df.columns and 'Longitude' in df.columns:
+            # Warna khusus untuk tiap cluster
+            cluster_colors = {
+                0: [255, 0, 0],
+                1: [0, 255, 0],
+                2: [0, 0, 255],
+                3: [255, 255, 0],
+                4: [255, 0, 255],
+                5: [0, 255, 255],
+                6: [128, 0, 128],
+                7: [255, 165, 0],
+                8: [0, 128, 0],
+                9: [128, 128, 0]
+            }
 
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
+            df['Cluster_color'] = df['Cluster'].apply(lambda x: cluster_colors.get(x, [100, 100, 100]))
+
+            # Tooltip yang muncul saat disentuh di peta
+            tooltip = {
+                "html": "<b>Nama Usaha:</b> {Nama_Usaha}<br/>"
+                        "<b>Omzet Bulanan:</b> {Omzet_Bulanan} Juta<br/>"
+                        "<b>Jumlah Karyawan:</b> {Jumlah_Karyawan}<br/>"
+                        "<b>Lama Usaha:</b> {Lama_Usaha} Tahun<br/>"
+                        "<b>Klaster:</b> {Cluster}",
+                "style": {
+                    "backgroundColor": "steelblue",
+                    "color": "white"
+                }
+            }
+
+            layer = pdk.Layer(
+                'ScatterplotLayer',
+                data=df,
+                get_position='[Longitude, Latitude]',
+                get_color='Cluster_color',
+                get_radius=200,
+                pickable=True
+            )
+
+            view_state = pdk.ViewState(
+                latitude=df['Latitude'].mean(),
+                longitude=df['Longitude'].mean(),
+                zoom=7.5,
+                pitch=0,
+            )
+
+            # di fokuskan untuk melihat sumsel   
+            #  view_state = pdk.ViewState(
+            #     latitude=-3.1267,
+            #     longitude=104.0935,
+            #     zoom=7.5,
+            #     pitch=0,
+            # )
+
+            map_chart = pdk.Deck(
+                map_style='mapbox://styles/mapbox/light-v9',
+                layers=[layer],
+                initial_view_state=view_state,
+                tooltip=tooltip
+            )
+
+            st.pydeck_chart(map_chart)
+
+            # Legenda warna
+            st.subheader("🎨 Legenda Warna Klaster")
+            for cluster_id in sorted(df['Cluster'].unique()):
+                color = cluster_colors.get(cluster_id, [100, 100, 100])
+                hex_color = '#%02x%02x%02x' % tuple(color)
+                st.markdown(f"<span style='color:{hex_color}; font-weight:bold;'>●</span> Klaster {cluster_id}", unsafe_allow_html=True)
+
         else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+            st.warning("Data belum memiliki kolom 'Latitude' dan 'Longitude' untuk ditampilkan di peta.")
+    else:
+        st.warning("Pilih minimal 2 variabel untuk clustering.")
+else:
+    st.info("Silakan unggah file CSV terlebih dahulu.")
